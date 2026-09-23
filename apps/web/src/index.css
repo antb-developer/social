@@ -1,0 +1,32 @@
+@import url("https://fonts.googleapis.com/css2?family=Outfit:wght@100..900&display=swap");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light dark;
+}
+
+body {
+  margin: 0;
+}
+
+@layer components {
+  /* Sidebar / dropdown menu item states, shared across the seller dashboard shell. */
+  .menu-item {
+    @apply relative flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors;
+  }
+  .menu-item-active {
+    @apply bg-brand-50 text-brand-500;
+  }
+  .menu-item-inactive {
+    @apply text-gray-700 hover:bg-gray-100 hover:text-gray-700;
+  }
+  .menu-item-icon-active {
+    @apply text-brand-500;
+  }
+  .menu-item-icon-inactive {
+    @apply text-gray-500 group-hover:text-gray-700;
+  }
+}
