@@ -19,7 +19,11 @@ export function createApp() {
   const app = express();
 
   app.use(helmet());
-  app.use(cors());
+  // CORS_ORIGIN: comma-separated allowed origins. Unset = open (dev only).
+  const corsOrigins = process.env.CORS_ORIGIN?.split(",")
+    .map((o) => o.trim())
+    .filter(Boolean);
+  app.use(cors(corsOrigins?.length ? { origin: corsOrigins } : undefined));
   app.use(express.json());
 
   app.get("/api/health", (_req, res) => {
