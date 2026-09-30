@@ -248,3 +248,42 @@ export async function deleteCustomer(customerId: string): Promise<void> {
   const { error } = await supabaseAdmin.from("customers").delete().eq("id", customerId);
   if (error) throw error;
 }
+
+export async function getOrderDetail(id: string) {
+  const { data, error } = await supabaseAdmin
+    .from("orders")
+    .select(
+      "id, order_no, status, total_paise, address, proof_uploaded, created_at, updated_at, seller:sellers(id, name, slug), customer:customers(id, name, phone), items:order_items(id, name_snapshot, price_snapshot_paise, qty)"
+    )
+    .eq("id", id)
+    .maybeSingle();
+  if (error) throw error;
+  return data;
+}
+
+/** Deletes specific orders by id (any seller/customer), cascading to their items/messages/proofs/history. */
+export async function deleteOrdersByIds(ids: string[]): Promise<number> {
+  const { count, error } = await supabaseAdmin.from("orders").delete({ count: "exact" }).in("id", ids);
+  if (error) throw error;
+  return count ?? 0;
+}
+
+export async function countOwners(sellerId: string): Promise<number> {
+  const { count, error } = await supabaseAdmin
+    .from("seller_members")
+    .select("*", { count: "exact", head: true })
+    .eq("seller_id", sellerId)
+    .eq("role", "owner");
+  if (error) throw error;
+  return count ?? 0;
+}
+
+export async function deleteStoreMembers(sellerId: string, userIds: string[]): Promise<number> {
+  const { count, error } = await supabaseAdmin
+    .from("seller_members")
+    .delete({ count: "exact" })
+    .eq("seller_id", sellerId)
+    .in("user_id", userIds);
+  if (error) throw error;
+  return count ?? 0;
+}

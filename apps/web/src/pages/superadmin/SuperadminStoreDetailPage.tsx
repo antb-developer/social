@@ -1,14 +1,20 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { Breadcrumb } from "../../components/admin/Breadcrumb";
 import { Badge } from "../../components/admin/ui/Badge";
+import { BulkActionsBar } from "../../components/admin/ui/BulkActionsBar";
 import { Button } from "../../components/admin/ui/Button";
 import { ComponentCard } from "../../components/admin/ui/ComponentCard";
 import { ConfirmationModal } from "../../components/admin/ui/ConfirmationModal";
+import { Modal } from "../../components/admin/ui/Modal";
+import { OrderDetailModal } from "../../components/admin/ui/OrderDetailModal";
 import { Pagination } from "../../components/admin/ui/Pagination";
+import { RowActions } from "../../components/admin/ui/RowActions";
+import { SelectionCheckbox } from "../../components/admin/ui/SelectionCheckbox";
 import { Table, TableBody, TableCell, TableHeader, TableRow } from "../../components/admin/ui/Table";
 import { useModal } from "../../hooks/useModal";
+import { useRowSelection } from "../../hooks/useRowSelection";
 import { apiFetch, ApiError } from "../../lib/apiClient";
 import { getStaticAuthUser, staticAuthToken } from "../../lib/staticAuth";
 import { supabase } from "../../lib/supabaseClient";
@@ -44,15 +50,21 @@ function formatRupees(paise: number): string {
   return `₹${(paise / 100).toFixed(2)}`;
 }
 
+type PendingDelete = { kind: "orders" | "members"; ids: string[] } | null;
+
 export function SuperadminStoreDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [ordersPage, setOrdersPage] = useState(1);
+  const [viewOrderId, setViewOrderId] = useState<string | null>(null);
+  const [viewMember, setViewMember] = useState<Member | null>(null);
 
   const backupModal = useModal();
   const deleteOrdersModal = useModal();
   const deleteStoreModal = useModal();
+  const rowDeleteModal = useModal();
+  const [pendingDelete, setPendingDelete] = useState<PendingDelete>(null);
   const [actionError, setActionError] = useState<string | null>(null);
 
   const storeQuery = useQuery({
@@ -73,6 +85,16 @@ export function SuperadminStoreDetailPage() {
     queryFn: () => apiFetch<Member[]>(`/api/superadmin/stores/${id}/users`),
     enabled: Boolean(id),
   });
+
+  const orders = ordersQuery.data?.data ?? [];
+  const orderSelection = useRowSelection(orders.map((o) => o.id));
+  const members = usersQuery.data ?? [];
+  const memberSelection = useRowSelection(members.map((m) => m.user_id));
+
+  useEffect(() => {
+    orderSelection.clear();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ordersPage]);
 
   const backupMutation = useMutation({
     mutationFn: async () => {
@@ -111,6 +133,7 @@ export function SuperadminStoreDetailPage() {
     onSuccess: () => {
       deleteOrdersModal.closeModal();
       setActionError(null);
+      orderSelection.clear();
       queryClient.invalidateQueries({ queryKey: ["superadmin-store-orders", id] });
     },
     onError: (err) => setActionError(err instanceof ApiError ? err.message : "Couldn't delete orders."),
@@ -128,6 +151,51 @@ export function SuperadminStoreDetailPage() {
     },
     onError: (err) => setActionError(err instanceof ApiError ? err.message : "Couldn't delete the store."),
   });
+
+  const deleteOrderRowsMutation = useMutation({
+    mutationFn: (ids: string[]) =>
+      apiFetch<{ deletedCount: number }>("/api/superadmin/orders", {
+        method: "DELETE",
+        body: JSON.stringify({ ids }),
+      }),
+    onSuccess: () => {
+      rowDeleteModal.closeModal();
+      setPendingDelete(null);
+      orderSelection.clear();
+      queryClient.invalidateQueries({ queryKey: ["superadmin-store-orders", id] });
+      queryClient.invalidateQueries({ queryKey: ["superadmin-store", id] });
+    },
+  });
+
+  const deleteMembersMutation = useMutation({
+    mutationFn: (userIds: string[]) =>
+      apiFetch<{ deletedCount: number }>(`/api/superadmin/stores/${id}/members`, {
+        method: "DELETE",
+        body: JSON.stringify({ userIds }),
+      }),
+    onSuccess: () => {
+      rowDeleteModal.closeModal();
+      setPendingDelete(null);
+      memberSelection.clear();
+      queryClient.invalidateQueries({ queryKey: ["superadmin-store-users", id] });
+    },
+  });
+
+  function requestRowDelete(kind: "orders" | "members", ids: string[]) {
+    setPendingDelete({ kind, ids });
+    rowDeleteModal.openModal();
+  }
+
+  function confirmRowDelete() {
+    if (!pendingDelete) return;
+    if (pendingDelete.kind === "orders") {
+      deleteOrderRowsMutation.mutate(pendingDelete.ids);
+    } else {
+      deleteMembersMutation.mutate(pendingDelete.ids);
+    }
+  }
+
+  const rowDeleteMutation = pendingDelete?.kind === "members" ? deleteMembersMutation : deleteOrderRowsMutation;
 
   if (storeQuery.isLoading) {
     return <p className="p-4 text-sm text-gray-500">Loading store...</p>;
@@ -188,10 +256,23 @@ export function SuperadminStoreDetailPage() {
         </ComponentCard>
 
         <ComponentCard title="Orders" bodyClassName="p-0">
+          <BulkActionsBar
+            count={orderSelection.count}
+            itemLabel="order"
+            onDelete={() => requestRowDelete("orders", orderSelection.selectedIds)}
+          />
           <div className="max-w-full overflow-x-auto">
             <Table>
               <TableHeader className="border-b border-gray-100">
                 <TableRow>
+                  <TableCell isHeader className="w-10 px-5 py-3">
+                    <SelectionCheckbox
+                      checked={orderSelection.allSelected}
+                      indeterminate={orderSelection.isIndeterminate}
+                      onChange={orderSelection.toggleAll}
+                      ariaLabel="Select all orders"
+                    />
+                  </TableCell>
                   <TableCell isHeader className="px-5 py-3 text-start text-theme-xs font-medium text-gray-500">
                     Order
                   </TableCell>
@@ -203,6 +284,9 @@ export function SuperadminStoreDetailPage() {
                   </TableCell>
                   <TableCell isHeader className="px-5 py-3 text-start text-theme-xs font-medium text-gray-500">
                     Placed
+                  </TableCell>
+                  <TableCell isHeader className="px-5 py-3 text-end text-theme-xs font-medium text-gray-500">
+                    Actions
                   </TableCell>
                 </TableRow>
               </TableHeader>
@@ -217,13 +301,20 @@ export function SuperadminStoreDetailPage() {
                     <TableCell className="px-5 py-5 text-sm text-error-600">Couldn't load orders.</TableCell>
                   </TableRow>
                 )}
-                {!ordersQuery.isLoading && !ordersQuery.isError && (ordersQuery.data?.data.length ?? 0) === 0 && (
+                {!ordersQuery.isLoading && !ordersQuery.isError && orders.length === 0 && (
                   <TableRow>
                     <TableCell className="px-5 py-5 text-sm text-gray-500">No orders for this store.</TableCell>
                   </TableRow>
                 )}
-                {ordersQuery.data?.data.map((order) => (
+                {orders.map((order) => (
                   <TableRow key={order.id}>
+                    <TableCell className="px-5 py-4">
+                      <SelectionCheckbox
+                        checked={orderSelection.selected.has(order.id)}
+                        onChange={() => orderSelection.toggle(order.id)}
+                        ariaLabel={`Select ${order.order_no}`}
+                      />
+                    </TableCell>
                     <TableCell className="px-5 py-4 text-start text-theme-sm font-medium text-gray-800">
                       {order.order_no}
                     </TableCell>
@@ -237,6 +328,12 @@ export function SuperadminStoreDetailPage() {
                     </TableCell>
                     <TableCell className="px-5 py-4 text-start text-theme-sm text-gray-500">
                       {new Date(order.created_at).toLocaleDateString()}
+                    </TableCell>
+                    <TableCell className="px-5 py-4 text-end">
+                      <RowActions
+                        onView={() => setViewOrderId(order.id)}
+                        onDelete={() => requestRowDelete("orders", [order.id])}
+                      />
                     </TableCell>
                   </TableRow>
                 ))}
@@ -254,10 +351,23 @@ export function SuperadminStoreDetailPage() {
         </ComponentCard>
 
         <ComponentCard title="Users" bodyClassName="p-0">
+          <BulkActionsBar
+            count={memberSelection.count}
+            itemLabel="member"
+            onDelete={() => requestRowDelete("members", memberSelection.selectedIds)}
+          />
           <div className="max-w-full overflow-x-auto">
             <Table>
               <TableHeader className="border-b border-gray-100">
                 <TableRow>
+                  <TableCell isHeader className="w-10 px-5 py-3">
+                    <SelectionCheckbox
+                      checked={memberSelection.allSelected}
+                      indeterminate={memberSelection.isIndeterminate}
+                      onChange={memberSelection.toggleAll}
+                      ariaLabel="Select all members"
+                    />
+                  </TableCell>
                   <TableCell isHeader className="px-5 py-3 text-start text-theme-xs font-medium text-gray-500">
                     Phone
                   </TableCell>
@@ -266,6 +376,9 @@ export function SuperadminStoreDetailPage() {
                   </TableCell>
                   <TableCell isHeader className="px-5 py-3 text-start text-theme-xs font-medium text-gray-500">
                     Since
+                  </TableCell>
+                  <TableCell isHeader className="px-5 py-3 text-end text-theme-xs font-medium text-gray-500">
+                    Actions
                   </TableCell>
                 </TableRow>
               </TableHeader>
@@ -280,13 +393,20 @@ export function SuperadminStoreDetailPage() {
                     <TableCell className="px-5 py-5 text-sm text-error-600">Couldn't load users.</TableCell>
                   </TableRow>
                 )}
-                {!usersQuery.isLoading && !usersQuery.isError && (usersQuery.data?.length ?? 0) === 0 && (
+                {!usersQuery.isLoading && !usersQuery.isError && members.length === 0 && (
                   <TableRow>
                     <TableCell className="px-5 py-5 text-sm text-gray-500">No members.</TableCell>
                   </TableRow>
                 )}
-                {usersQuery.data?.map((member) => (
+                {members.map((member) => (
                   <TableRow key={member.user_id}>
+                    <TableCell className="px-5 py-4">
+                      <SelectionCheckbox
+                        checked={memberSelection.selected.has(member.user_id)}
+                        onChange={() => memberSelection.toggle(member.user_id)}
+                        ariaLabel={`Select ${member.phone ?? member.user_id}`}
+                      />
+                    </TableCell>
                     <TableCell className="px-5 py-4 text-start text-theme-sm text-gray-800">
                       {member.phone ?? member.user_id}
                     </TableCell>
@@ -297,6 +417,12 @@ export function SuperadminStoreDetailPage() {
                     </TableCell>
                     <TableCell className="px-5 py-4 text-start text-theme-sm text-gray-500">
                       {new Date(member.created_at).toLocaleDateString()}
+                    </TableCell>
+                    <TableCell className="px-5 py-4 text-end">
+                      <RowActions
+                        onView={() => setViewMember(member)}
+                        onDelete={() => requestRowDelete("members", [member.user_id])}
+                      />
                     </TableCell>
                   </TableRow>
                 ))}
@@ -319,6 +445,34 @@ export function SuperadminStoreDetailPage() {
           </div>
         </ComponentCard>
       </div>
+
+      <OrderDetailModal orderId={viewOrderId} onClose={() => setViewOrderId(null)} />
+
+      <Modal isOpen={Boolean(viewMember)} onClose={() => setViewMember(null)} className="max-w-sm p-6">
+        {viewMember && (
+          <div className="space-y-3">
+            <h3 className="text-lg font-medium text-gray-800">{viewMember.phone ?? "Member"}</h3>
+            <dl className="space-y-2 text-sm">
+              <div>
+                <dt className="text-xs text-gray-500">Role</dt>
+                <dd>
+                  <Badge size="sm" color={viewMember.role === "owner" ? "primary" : "light"}>
+                    {viewMember.role}
+                  </Badge>
+                </dd>
+              </div>
+              <div>
+                <dt className="text-xs text-gray-500">User ID</dt>
+                <dd className="break-all text-gray-800">{viewMember.user_id}</dd>
+              </div>
+              <div>
+                <dt className="text-xs text-gray-500">Member since</dt>
+                <dd className="text-gray-800">{new Date(viewMember.created_at).toLocaleDateString()}</dd>
+              </div>
+            </dl>
+          </div>
+        )}
+      </Modal>
 
       <ConfirmationModal
         isOpen={backupModal.isOpen}
@@ -355,6 +509,33 @@ export function SuperadminStoreDetailPage() {
         confirmLabel="Delete store"
         loading={deleteStoreMutation.isPending}
         error={actionError}
+      />
+
+      <ConfirmationModal
+        isOpen={rowDeleteModal.isOpen}
+        onClose={() => {
+          rowDeleteModal.closeModal();
+          setPendingDelete(null);
+        }}
+        onConfirm={confirmRowDelete}
+        title={
+          pendingDelete?.kind === "members"
+            ? pendingDelete.ids.length > 1
+              ? "Remove members"
+              : "Remove member"
+            : pendingDelete && pendingDelete.ids.length > 1
+              ? "Delete orders"
+              : "Delete order"
+        }
+        description={
+          pendingDelete?.kind === "members"
+            ? `This removes ${pendingDelete.ids.length > 1 ? `${pendingDelete.ids.length} members` : "this member"} from the store. They will lose access to the seller dashboard.`
+            : `This permanently deletes ${pendingDelete && pendingDelete.ids.length > 1 ? `${pendingDelete.ids.length} orders` : "this order"}, including messages, payment proofs and status history. This cannot be undone.`
+        }
+        variant="destructive"
+        confirmLabel={pendingDelete?.kind === "members" ? "Remove" : "Delete"}
+        loading={rowDeleteMutation.isPending}
+        error={rowDeleteMutation.error instanceof ApiError ? rowDeleteMutation.error.message : rowDeleteMutation.error ? "Couldn't complete this action." : null}
       />
     </div>
   );

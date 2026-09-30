@@ -225,10 +225,10 @@ Supabase project.
 ### Web
 
 `apps/web` builds to a static bundle (`npm run build --workspace apps/web`
-→ `apps/web/dist`) — deploy it to any static host (Vercel, Netlify,
-Cloudflare Pages, etc.) with the `VITE_*` env vars set at build time. Make
-sure the host serves `index.html` for unknown paths (SPA fallback) and
-serves `apps/web/public/*` (icons, `manifest.webmanifest`, `sw.js`) as-is.
+→ `apps/web/dist`), served by nginx on a DigitalOcean droplet. The
+`Deploy web` GitHub Action builds it with the `VITE_*` vars and rsyncs it
+to the droplet on push to `main`; nginx config is in `deploy/nginx.conf`.
+See `DEPLOYMENT.md`. The API is deployed manually on Railway.
 
 **Known follow-up:** the production JS bundle is ~500KB
 (`vite build` warns about this) — no route-based code-splitting yet. Worth

@@ -7,7 +7,8 @@ export type SuperadminAuditAction =
   | "store_deleted"
   | "customer_viewed"
   | "customer_orders_deleted"
-  | "customer_deleted";
+  | "customer_deleted"
+  | "member_removed";
 
 export async function recordSuperadminAudit(input: {
   actorUserId: string;

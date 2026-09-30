@@ -1,14 +1,19 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { Breadcrumb } from "../../components/admin/Breadcrumb";
 import { Badge } from "../../components/admin/ui/Badge";
+import { BulkActionsBar } from "../../components/admin/ui/BulkActionsBar";
 import { Button } from "../../components/admin/ui/Button";
 import { ComponentCard } from "../../components/admin/ui/ComponentCard";
 import { ConfirmationModal } from "../../components/admin/ui/ConfirmationModal";
+import { OrderDetailModal } from "../../components/admin/ui/OrderDetailModal";
 import { Pagination } from "../../components/admin/ui/Pagination";
+import { RowActions } from "../../components/admin/ui/RowActions";
+import { SelectionCheckbox } from "../../components/admin/ui/SelectionCheckbox";
 import { Table, TableBody, TableCell, TableHeader, TableRow } from "../../components/admin/ui/Table";
 import { useModal } from "../../hooks/useModal";
+import { useRowSelection } from "../../hooks/useRowSelection";
 import { apiFetch, ApiError } from "../../lib/apiClient";
 
 type Customer = { id: string; name: string | null; phone: string; created_at: string };
@@ -43,9 +48,12 @@ export function SuperadminCustomerDetailPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [ordersPage, setOrdersPage] = useState(1);
+  const [viewOrderId, setViewOrderId] = useState<string | null>(null);
 
   const deleteOrdersModal = useModal();
   const deleteCustomerModal = useModal();
+  const rowDeleteModal = useModal();
+  const [pendingDeleteIds, setPendingDeleteIds] = useState<string[] | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
 
   const customerQuery = useQuery({
@@ -61,6 +69,14 @@ export function SuperadminCustomerDetailPage() {
     enabled: Boolean(id),
   });
 
+  const orders = ordersQuery.data?.data ?? [];
+  const selection = useRowSelection(orders.map((o) => o.id));
+
+  useEffect(() => {
+    selection.clear();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ordersPage]);
+
   const deleteOrdersMutation = useMutation({
     mutationFn: () =>
       apiFetch<{ deletedCount: number }>(`/api/superadmin/customers/${id}/orders`, {
@@ -71,6 +87,7 @@ export function SuperadminCustomerDetailPage() {
       deleteOrdersModal.closeModal();
       setActionError(null);
       setOrdersPage(1);
+      selection.clear();
       queryClient.invalidateQueries({ queryKey: ["superadmin-customer-orders", id] });
       queryClient.invalidateQueries({ queryKey: ["superadmin-customers"] });
     },
@@ -90,6 +107,26 @@ export function SuperadminCustomerDetailPage() {
     },
     onError: (err) => setActionError(err instanceof ApiError ? err.message : "Couldn't delete the customer."),
   });
+
+  const deleteOrderRowsMutation = useMutation({
+    mutationFn: (ids: string[]) =>
+      apiFetch<{ deletedCount: number }>("/api/superadmin/orders", {
+        method: "DELETE",
+        body: JSON.stringify({ ids }),
+      }),
+    onSuccess: () => {
+      rowDeleteModal.closeModal();
+      setPendingDeleteIds(null);
+      selection.clear();
+      queryClient.invalidateQueries({ queryKey: ["superadmin-customer-orders", id] });
+      queryClient.invalidateQueries({ queryKey: ["superadmin-customers"] });
+    },
+  });
+
+  function requestRowDelete(ids: string[]) {
+    setPendingDeleteIds(ids);
+    rowDeleteModal.openModal();
+  }
 
   if (customerQuery.isLoading) {
     return <p className="p-4 text-sm text-gray-500">Loading customer...</p>;
@@ -128,10 +165,19 @@ export function SuperadminCustomerDetailPage() {
         </ComponentCard>
 
         <ComponentCard title="Orders" bodyClassName="p-0">
+          <BulkActionsBar count={selection.count} itemLabel="order" onDelete={() => requestRowDelete(selection.selectedIds)} />
           <div className="max-w-full overflow-x-auto">
             <Table>
               <TableHeader className="border-b border-gray-100">
                 <TableRow>
+                  <TableCell isHeader className="w-10 px-5 py-3">
+                    <SelectionCheckbox
+                      checked={selection.allSelected}
+                      indeterminate={selection.isIndeterminate}
+                      onChange={selection.toggleAll}
+                      ariaLabel="Select all orders"
+                    />
+                  </TableCell>
                   <TableCell isHeader className="px-5 py-3 text-start text-theme-xs font-medium text-gray-500">
                     Order
                   </TableCell>
@@ -147,6 +193,9 @@ export function SuperadminCustomerDetailPage() {
                   <TableCell isHeader className="px-5 py-3 text-start text-theme-xs font-medium text-gray-500">
                     Placed
                   </TableCell>
+                  <TableCell isHeader className="px-5 py-3 text-end text-theme-xs font-medium text-gray-500">
+                    Actions
+                  </TableCell>
                 </TableRow>
               </TableHeader>
               <TableBody className="divide-y divide-gray-100">
@@ -160,13 +209,20 @@ export function SuperadminCustomerDetailPage() {
                     <TableCell className="px-5 py-5 text-sm text-error-600">Couldn't load orders.</TableCell>
                   </TableRow>
                 )}
-                {!ordersQuery.isLoading && !ordersQuery.isError && (ordersQuery.data?.data.length ?? 0) === 0 && (
+                {!ordersQuery.isLoading && !ordersQuery.isError && orders.length === 0 && (
                   <TableRow>
                     <TableCell className="px-5 py-5 text-sm text-gray-500">No orders for this customer.</TableCell>
                   </TableRow>
                 )}
-                {ordersQuery.data?.data.map((order) => (
+                {orders.map((order) => (
                   <TableRow key={order.id}>
+                    <TableCell className="px-5 py-4">
+                      <SelectionCheckbox
+                        checked={selection.selected.has(order.id)}
+                        onChange={() => selection.toggle(order.id)}
+                        ariaLabel={`Select ${order.order_no}`}
+                      />
+                    </TableCell>
                     <TableCell className="px-5 py-4 text-start text-theme-sm font-medium text-gray-800">
                       {order.order_no}
                     </TableCell>
@@ -189,6 +245,9 @@ export function SuperadminCustomerDetailPage() {
                     </TableCell>
                     <TableCell className="px-5 py-4 text-start text-theme-sm text-gray-500">
                       {new Date(order.created_at).toLocaleDateString()}
+                    </TableCell>
+                    <TableCell className="px-5 py-4 text-end">
+                      <RowActions onView={() => setViewOrderId(order.id)} onDelete={() => requestRowDelete([order.id])} />
                     </TableCell>
                   </TableRow>
                 ))}
@@ -217,6 +276,8 @@ export function SuperadminCustomerDetailPage() {
         </ComponentCard>
       </div>
 
+      <OrderDetailModal orderId={viewOrderId} onClose={() => setViewOrderId(null)} />
+
       <ConfirmationModal
         isOpen={deleteOrdersModal.isOpen}
         onClose={deleteOrdersModal.closeModal}
@@ -241,6 +302,29 @@ export function SuperadminCustomerDetailPage() {
         confirmLabel="Delete customer"
         loading={deleteCustomerMutation.isPending}
         error={actionError}
+      />
+
+      <ConfirmationModal
+        isOpen={rowDeleteModal.isOpen}
+        onClose={() => {
+          rowDeleteModal.closeModal();
+          setPendingDeleteIds(null);
+        }}
+        onConfirm={() => pendingDeleteIds && deleteOrderRowsMutation.mutate(pendingDeleteIds)}
+        title={pendingDeleteIds && pendingDeleteIds.length > 1 ? "Delete orders" : "Delete order"}
+        description={`This permanently deletes ${
+          pendingDeleteIds && pendingDeleteIds.length > 1 ? `${pendingDeleteIds.length} orders` : "this order"
+        }, including messages, payment proofs and status history. This cannot be undone.`}
+        variant="destructive"
+        confirmLabel="Delete"
+        loading={deleteOrderRowsMutation.isPending}
+        error={
+          deleteOrderRowsMutation.error instanceof ApiError
+            ? deleteOrderRowsMutation.error.message
+            : deleteOrderRowsMutation.error
+              ? "Couldn't delete."
+              : null
+        }
       />
     </div>
   );

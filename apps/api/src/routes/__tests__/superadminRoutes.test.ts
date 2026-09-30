@@ -22,6 +22,10 @@ const mocks = vi.hoisted(() => ({
   findOrderIdsByCustomer: vi.fn(),
   deleteCustomerOrders: vi.fn(),
   deleteCustomer: vi.fn(),
+  deleteOrdersByIds: vi.fn(),
+  getOrderDetail: vi.fn(),
+  countOwners: vi.fn(),
+  deleteStoreMembers: vi.fn(),
   purgeOrderProofs: vi.fn(),
   recordSuperadminAudit: vi.fn(),
   streamStoreBackup: vi.fn(),
@@ -61,6 +65,10 @@ vi.mock("../../repositories/superadminRepository", () => ({
   findOrderIdsByCustomer: mocks.findOrderIdsByCustomer,
   deleteCustomerOrders: mocks.deleteCustomerOrders,
   deleteCustomer: mocks.deleteCustomer,
+  deleteOrdersByIds: mocks.deleteOrdersByIds,
+  getOrderDetail: mocks.getOrderDetail,
+  countOwners: mocks.countOwners,
+  deleteStoreMembers: mocks.deleteStoreMembers,
 }));
 
 vi.mock("../../repositories/authUserRepository", () => ({
@@ -507,5 +515,182 @@ describe("superadmin customers", () => {
     expect(mocks.recordSuperadminAudit).toHaveBeenCalledWith(
       expect.objectContaining({ action: "customer_deleted", targetId: CUSTOMER.id })
     );
+  });
+});
+
+const ORDER_ID_1 = "11111111-1111-1111-1111-111111111111";
+const ORDER_ID_2 = "22222222-2222-2222-2222-222222222222";
+const USER_ID_1 = "33333333-3333-3333-3333-333333333333";
+const USER_ID_2 = "44444444-4444-4444-4444-444444444444";
+
+describe("GET /api/superadmin/orders/:id", () => {
+  it("404s for an unknown order", async () => {
+    asSuperadmin();
+    mocks.getOrderDetail.mockResolvedValue(null);
+
+    const res = await request(createApp())
+      .get(`/api/superadmin/orders/${ORDER_ID_1}`)
+      .set("Authorization", "Bearer good");
+
+    expect(res.status).toBe(404);
+  });
+
+  it("returns the order detail", async () => {
+    asSuperadmin();
+    const order = { id: ORDER_ID_1, order_no: "ORD-1", items: [] };
+    mocks.getOrderDetail.mockResolvedValue(order);
+
+    const res = await request(createApp())
+      .get(`/api/superadmin/orders/${ORDER_ID_1}`)
+      .set("Authorization", "Bearer good");
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(order);
+  });
+});
+
+describe("DELETE /api/superadmin/orders (row selection)", () => {
+  it("rejects an empty id list", async () => {
+    asSuperadmin();
+
+    const res = await request(createApp())
+      .delete("/api/superadmin/orders")
+      .set("Authorization", "Bearer good")
+      .send({ ids: [] });
+
+    expect(res.status).toBe(400);
+    expect(mocks.deleteOrdersByIds).not.toHaveBeenCalled();
+  });
+
+  it("deletes the given orders, purges their proofs, and audits", async () => {
+    asSuperadmin();
+    mocks.deleteOrdersByIds.mockResolvedValue(2);
+
+    const res = await request(createApp())
+      .delete("/api/superadmin/orders")
+      .set("Authorization", "Bearer good")
+      .send({ ids: [ORDER_ID_1, ORDER_ID_2] });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ deletedCount: 2 });
+    expect(mocks.deleteOrdersByIds).toHaveBeenCalledWith([ORDER_ID_1, ORDER_ID_2]);
+    expect(mocks.purgeOrderProofs).toHaveBeenCalledWith([ORDER_ID_1, ORDER_ID_2]);
+    expect(mocks.recordSuperadminAudit).toHaveBeenCalledWith({
+      actorUserId: SUPERADMIN_USER.id,
+      action: "orders_deleted",
+      targetType: "order",
+      metadata: { ids: [ORDER_ID_1, ORDER_ID_2], deletedCount: 2 },
+    });
+  });
+});
+
+describe("DELETE /api/superadmin/stores (row selection)", () => {
+  it("rejects an empty id list", async () => {
+    asSuperadmin();
+
+    const res = await request(createApp())
+      .delete("/api/superadmin/stores")
+      .set("Authorization", "Bearer good")
+      .send({ ids: [] });
+
+    expect(res.status).toBe(400);
+    expect(mocks.deleteStore).not.toHaveBeenCalled();
+  });
+
+  it("deletes each given store, purges storage, and audits per store", async () => {
+    asSuperadmin();
+    mocks.findStoreById.mockResolvedValue(STORE);
+    mocks.findOrderIdsBySeller.mockResolvedValue([]);
+
+    const res = await request(createApp())
+      .delete("/api/superadmin/stores")
+      .set("Authorization", "Bearer good")
+      .send({ ids: [STORE.id] });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ deletedCount: 1 });
+    expect(mocks.deleteStore).toHaveBeenCalledWith(STORE.id);
+    expect(mocks.recordSuperadminAudit).toHaveBeenCalledWith(
+      expect.objectContaining({ action: "store_deleted", targetId: STORE.id })
+    );
+  });
+
+  it("skips ids that no longer exist", async () => {
+    asSuperadmin();
+    mocks.findStoreById.mockResolvedValue(null);
+
+    const res = await request(createApp())
+      .delete("/api/superadmin/stores")
+      .set("Authorization", "Bearer good")
+      .send({ ids: [STORE.id] });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ deletedCount: 0 });
+    expect(mocks.deleteStore).not.toHaveBeenCalled();
+  });
+});
+
+describe("DELETE /api/superadmin/customers (row selection)", () => {
+  it("deletes each given customer, purges proofs, and audits per customer", async () => {
+    asSuperadmin();
+    mocks.findCustomerById.mockResolvedValue(CUSTOMER);
+    mocks.findOrderIdsByCustomer.mockResolvedValue(["o1"]);
+
+    const res = await request(createApp())
+      .delete("/api/superadmin/customers")
+      .set("Authorization", "Bearer good")
+      .send({ ids: [CUSTOMER.id] });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ deletedCount: 1 });
+    expect(mocks.deleteCustomer).toHaveBeenCalledWith(CUSTOMER.id);
+    expect(mocks.recordSuperadminAudit).toHaveBeenCalledWith(
+      expect.objectContaining({ action: "customer_deleted", targetId: CUSTOMER.id })
+    );
+  });
+});
+
+describe("DELETE /api/superadmin/stores/:id/members", () => {
+  it("rejects removing all owners", async () => {
+    asSuperadmin();
+    mocks.findStoreById.mockResolvedValue(STORE);
+    mocks.listStoreMembers.mockResolvedValue([{ user_id: USER_ID_1, role: "owner", created_at: "2026-01-01" }]);
+    mocks.countOwners.mockResolvedValue(1);
+
+    const res = await request(createApp())
+      .delete(`/api/superadmin/stores/${STORE.id}/members`)
+      .set("Authorization", "Bearer good")
+      .send({ userIds: [USER_ID_1] });
+
+    expect(res.status).toBe(400);
+    expect(mocks.deleteStoreMembers).not.toHaveBeenCalled();
+  });
+
+  it("removes staff members and audits", async () => {
+    asSuperadmin();
+    mocks.findStoreById.mockResolvedValue(STORE);
+    mocks.listStoreMembers.mockResolvedValue([
+      { user_id: USER_ID_1, role: "owner", created_at: "2026-01-01" },
+      { user_id: USER_ID_2, role: "staff", created_at: "2026-01-02" },
+    ]);
+    mocks.countOwners.mockResolvedValue(1);
+    mocks.deleteStoreMembers.mockResolvedValue(1);
+
+    const res = await request(createApp())
+      .delete(`/api/superadmin/stores/${STORE.id}/members`)
+      .set("Authorization", "Bearer good")
+      .send({ userIds: [USER_ID_2] });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ deletedCount: 1 });
+    expect(mocks.deleteStoreMembers).toHaveBeenCalledWith(STORE.id, [USER_ID_2]);
+    expect(mocks.recordSuperadminAudit).toHaveBeenCalledWith({
+      actorUserId: SUPERADMIN_USER.id,
+      action: "member_removed",
+      targetType: "store_member",
+      targetId: STORE.id,
+      sellerId: STORE.id,
+      metadata: { userIds: [USER_ID_2], deletedCount: 1 },
+    });
   });
 });

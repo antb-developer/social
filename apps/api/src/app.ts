@@ -18,6 +18,9 @@ import { superadminRoutes } from "./routes/superadminRoutes";
 export function createApp() {
   const app = express();
 
+  // Railway sits behind a proxy — trust one hop so req.ip (and the rate
+  // limiter) sees the real client IP from X-Forwarded-For.
+  app.set("trust proxy", 1);
   app.use(helmet());
   // CORS_ORIGIN: comma-separated allowed origins. Unset = open (dev only).
   const corsOrigins = process.env.CORS_ORIGIN?.split(",")

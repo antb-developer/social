@@ -2,11 +2,12 @@
 
 Three independent pieces to ship: **Supabase** (already live), **apps/api**
 (Express, needs a host that runs a persistent Node process), **apps/web**
-(static Vite build, needs a static host). Recommended path below is
-git-based push-to-deploy for both app pieces — connect each to this repo,
-and every push to `main` redeploys automatically. Everything here is a
-recommendation, not a requirement; swap any piece for whatever you already
-have accounts/infra for.
+(static Vite build, served by nginx on a DigitalOcean droplet).
+
+- **Web → DigitalOcean droplet**, automatic: `.github/workflows/deploy-web.yml`
+  builds `apps/web` and rsyncs `dist/` to the droplet on every push to `main`
+  that touches `apps/web/**`. nginx config lives in `deploy/nginx.conf`.
+- **API → Railway**, manual: deployed by hand, not wired to auto-deploy on push.
 
 ## Current state (checked 2026-09-23)
 
@@ -31,8 +32,9 @@ have accounts/infra for.
 
 - [ ] A GitHub account with push access to `origin` (or a new repo, if you'd
       rather not reuse `shoe-shop`)
-- [ ] A Railway (or Render/Fly.io) account for the API
-- [ ] A Vercel (or Netlify/Cloudflare Pages) account for the web app
+- [ ] A Railway account for the API
+- [ ] A DigitalOcean droplet (Ubuntu + nginx) for the web app, with an SSH
+      key the GitHub Action can use
 - [ ] Nothing needed for Supabase — already provisioned
 
 ---
@@ -44,25 +46,17 @@ git checkout feature/seller-order-desk
 git push -u origin feature/seller-order-desk
 ```
 
-Then either:
-- **Merge to `main`** now (`gh pr create --base main --head feature/seller-order-desk`,
-  merge it) if you want `main` to be what auto-deploys, or
-- **Deploy straight from the feature branch** and merge later — both
-  Railway and Vercel let you pick any branch as the production branch, so
-  this isn't blocking.
+Then merge to `main` (`gh pr create --base main --head feature/seller-order-desk`)
+— the web deploy workflow only runs on pushes to `main` (or manually via
+**Actions → Deploy web → Run workflow**).
 
-I'd default to merging to `main` first (matches what both hosts assume by
-default and keeps the deploy config simple) — say if you'd rather deploy
-from the feature branch instead.
+## Step 2 — Deploy the API (Railway, manual)
 
-## Step 2 — Deploy the API (Railway)
-
-1. New Project → **Deploy from GitHub repo** → pick this repo.
-2. Railway auto-detects the `Dockerfile`. If it tries to build from
-   `apps/api/` as the root instead of the monorepo root, set **Root
-   Directory** to `/` (repo root) and **Dockerfile Path** to
-   `apps/api/Dockerfile` — the Dockerfile's `COPY` paths assume a repo-root
-   build context.
+1. Create a Railway service for the API. Deploys are triggered manually
+   (not on push to `main`).
+2. Deploy from the **repo root** (`railway up`). `railway.json` at the root
+   pins the build to `apps/api/Dockerfile` and sets the health check to
+   `/api/health` — the Dockerfile's `COPY` paths assume a repo-root build context.
 3. Environment variables (Settings → Variables) — copy from
    `apps/api/.env.example`, using **production** values:
 
@@ -79,57 +73,50 @@ from the feature branch instead.
    | `SUPERADMIN_PASSWORD` | a real strong password, not `Superadmin@123` |
    | `SUPERADMIN_TOKEN_SECRET` | random secret — `openssl rand -hex 32` |
    | `PORT` | leave unset; Railway injects its own and the app reads `process.env.PORT` |
+   | `CORS_ORIGIN` | the droplet's web origin, e.g. `https://your-domain.com` (see Step 4) |
 
    **Do not deploy with the default superadmin credentials or token secret
    — they're public knowledge now (in this chat and in `.env.example`).**
-4. Deploy. Railway gives you a `*.up.railway.app` URL — note it, `apps/web`
+4. Deploy manually. Railway gives you a `*.up.railway.app` URL — note it, `apps/web`
    needs it as `VITE_API_BASE_URL`.
 5. Health check: `curl https://<your-api>.up.railway.app/api/health` → `{"ok":true}`.
 
-*(Render or Fly.io work the same way — GitHub-connected service, same
-Dockerfile, same env vars. Railway's just the least config for a first
-deploy.)*
+Redeploy by hand after API changes land on `main`.
 
-## Step 3 — Deploy the web app (Vercel)
+## Step 3 — Deploy the web app (DigitalOcean droplet)
 
-1. New Project → import this GitHub repo.
-2. Framework preset: **Vite**. Root Directory: `apps/web`.
-3. Build command: `npm run build` (inherits from `apps/web/package.json`).
-   Output directory: `dist`.
-4. Environment variables (all `VITE_*` ones are baked in at build time, so
-   set them *before* the first deploy):
+**One-time droplet setup:**
 
-   | Var | Value |
-   |---|---|
-   | `VITE_SUPABASE_URL` | same as API's `SUPABASE_URL` |
-   | `VITE_SUPABASE_ANON_KEY` | same as API's `SUPABASE_ANON_KEY` |
-   | `VITE_API_BASE_URL` | the Railway URL from Step 2 |
-   | `VITE_DEV_OTP_MODE` | matches the API's `DEV_OTP_MODE` |
-   | `VITE_VAPID_PUBLIC_KEY` | the **public** VAPID key from Step 2 |
+1. Install nginx, create the web root: `sudo mkdir -p /var/www/app` and make
+   it writable by the deploy user.
+2. Copy `deploy/nginx.conf` to `/etc/nginx/sites-available/app`, replace
+   `SERVER_NAME`, symlink into `sites-enabled`, `sudo nginx -t && sudo systemctl reload nginx`.
+   The config already handles the SPA fallback (`try_files $uri /index.html`)
+   and no-cache headers for `sw.js` / `manifest.webmanifest`.
+3. HTTPS (needed for the service worker / push): `sudo certbot --nginx`.
 
-5. SPA fallback: Vercel's Vite preset handles this automatically (rewrites
-   unknown paths to `index.html`). If you use a different host, add that
-   rewrite rule explicitly.
-6. Deploy. You get a `*.vercel.app` URL.
+**GitHub repo settings** (Settings → Secrets and variables → Actions):
 
-*(Netlify/Cloudflare Pages: same idea — root `apps/web`, build command
-`npm run build`, publish dir `dist`, same env vars, and you'll need to add
-the SPA fallback rewrite explicitly on Netlify: a `_redirects` file with
-`/* /index.html 200`.)*
+| Kind | Name | Value |
+|---|---|---|
+| Secret | `DROPLET_HOST` | droplet IP / hostname |
+| Secret | `DROPLET_USER` | SSH user that owns `/var/www/app` |
+| Secret | `DROPLET_SSH_KEY` | private key for that user |
+| Variable | `VITE_SUPABASE_URL` | same as API's `SUPABASE_URL` |
+| Variable | `VITE_SUPABASE_ANON_KEY` | same as API's `SUPABASE_ANON_KEY` |
+| Variable | `VITE_API_BASE_URL` | the Railway URL from Step 2 |
+| Variable | `VITE_DEV_OTP_MODE` | matches the API's `DEV_OTP_MODE` |
+| Variable | `VITE_VAPID_PUBLIC_KEY` | the **public** VAPID key from Step 2 |
+
+`VITE_*` values are baked in at build time — set them before the first run.
+
+**Deploy:** push to `main` (changes under `apps/web/**`), or run
+**Actions → Deploy web** manually.
 
 ## Step 4 — Wire CORS to the real web origin
 
-Right now `apps/api/src/app.ts` does `app.use(cors())` — open to any
-origin. Once you know the production web URL (Vercel domain or your custom
-domain), tighten it:
-
-```ts
-app.use(cors({ origin: "https://your-web-domain.com" }));
-```
-
-I can make this change (and read it from an env var so previews still work)
-whenever you're ready — didn't want to do it blind without knowing the
-final domain.
+Set `CORS_ORIGIN` on the Railway service to the droplet's web origin
+(comma-separated for more than one). Unset = open to any origin.
 
 ## Step 5 — Production hardening checklist
 
@@ -155,10 +142,9 @@ real money moving through payment proofs), or gate the whole site behind
 something else (password, IP allowlist, unlisted URL) until DLT is ready.
 Flag which one you want and I'll help wire it up.
 
-**Domain.** Plan above uses the free `*.up.railway.app` / `*.vercel.app`
-subdomains. If you have (or want) a custom domain, both hosts support it
-directly in their dashboards (Railway: Settings → Domains; Vercel: Settings
-→ Domains) — DNS is usually a CNAME, a few minutes to propagate.
+**Domain.** Web: point an A record at the droplet IP and set it as
+`server_name` in nginx. API: Railway's free `*.up.railway.app` subdomain,
+or a custom domain via Railway → Settings → Domains (CNAME).
 
 **Scaling the rate limiter.** `express-rate-limit`'s default store is
 in-memory, per-process. Fine on a single Railway instance; if you ever
@@ -175,9 +161,6 @@ git checkout -b my-change
 # ... make changes ...
 git push -u origin my-change
 gh pr create
-# merge → main auto-redeploys both Railway and Vercel
+# merge → main auto-deploys web to the droplet (GitHub Action)
+# API changes → redeploy manually on Railway
 ```
-
-Both Railway and Vercel also give you preview deployments per-branch/PR if
-you want to test before merging — worth turning on once the initial deploy
-is working.

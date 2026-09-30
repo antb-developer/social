@@ -7,6 +7,7 @@ import {
   countStores,
   findCustomerById,
   findStoreById,
+  getOrderDetail,
   listAllOrders,
   listCustomerOrders,
   listCustomers,
@@ -134,4 +135,13 @@ export async function getSuperadminCustomerOrders(req: Request, res: Response) {
 
   const result = await listCustomerOrders(customer.id, { page, pageSize });
   res.json({ ...result, page, pageSize });
+}
+
+export async function getSuperadminOrderDetail(req: Request, res: Response) {
+  requireSuperadminUserId(req);
+  const order = await getOrderDetail(req.params.id);
+  if (!order) {
+    throw new AppError(404, "order_not_found", "No such order");
+  }
+  res.json(order);
 }

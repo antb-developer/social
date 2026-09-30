@@ -1,13 +1,19 @@
-import { useQuery } from "@tanstack/react-query";
-import { useState } from "react";
-import { Link } from "react-router-dom";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { Breadcrumb } from "../../components/admin/Breadcrumb";
 import { SearchIcon } from "../../components/admin/icons";
+import { BulkActionsBar } from "../../components/admin/ui/BulkActionsBar";
 import { ComponentCard } from "../../components/admin/ui/ComponentCard";
+import { ConfirmationModal } from "../../components/admin/ui/ConfirmationModal";
 import { Input } from "../../components/admin/ui/Input";
 import { Pagination } from "../../components/admin/ui/Pagination";
+import { RowActions } from "../../components/admin/ui/RowActions";
+import { SelectionCheckbox } from "../../components/admin/ui/SelectionCheckbox";
 import { Table, TableBody, TableCell, TableHeader, TableRow } from "../../components/admin/ui/Table";
-import { apiFetch } from "../../lib/apiClient";
+import { useModal } from "../../hooks/useModal";
+import { useRowSelection } from "../../hooks/useRowSelection";
+import { apiFetch, ApiError } from "../../lib/apiClient";
 
 type Store = {
   id: string;
@@ -24,8 +30,12 @@ type StoresResponse = { data: Store[]; total: number; page: number; pageSize: nu
 const PAGE_SIZE = 20;
 
 export function SuperadminStoresPage() {
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
+  const [pendingDeleteIds, setPendingDeleteIds] = useState<string[] | null>(null);
+  const deleteModal = useModal();
 
   const storesQuery = useQuery({
     queryKey: ["superadmin-stores", search, page],
@@ -39,6 +49,31 @@ export function SuperadminStoresPage() {
   });
 
   const stores = storesQuery.data?.data ?? [];
+  const selection = useRowSelection(stores.map((s) => s.id));
+
+  useEffect(() => {
+    selection.clear();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [search, page]);
+
+  const deleteMutation = useMutation({
+    mutationFn: (ids: string[]) =>
+      apiFetch<{ deletedCount: number }>("/api/superadmin/stores", {
+        method: "DELETE",
+        body: JSON.stringify({ ids }),
+      }),
+    onSuccess: () => {
+      deleteModal.closeModal();
+      setPendingDeleteIds(null);
+      selection.clear();
+      queryClient.invalidateQueries({ queryKey: ["superadmin-stores"] });
+    },
+  });
+
+  function requestDelete(ids: string[]) {
+    setPendingDeleteIds(ids);
+    deleteModal.openModal();
+  }
 
   return (
     <div>
@@ -66,10 +101,20 @@ export function SuperadminStoresPage() {
           </div>
         </div>
 
+        <BulkActionsBar count={selection.count} itemLabel="store" onDelete={() => requestDelete(selection.selectedIds)} />
+
         <div className="max-w-full overflow-x-auto">
           <Table>
             <TableHeader className="border-b border-gray-100">
               <TableRow>
+                <TableCell isHeader className="w-10 px-5 py-3">
+                  <SelectionCheckbox
+                    checked={selection.allSelected}
+                    indeterminate={selection.isIndeterminate}
+                    onChange={selection.toggleAll}
+                    ariaLabel="Select all stores"
+                  />
+                </TableCell>
                 <TableCell isHeader className="px-5 py-3 text-start text-theme-xs font-medium text-gray-500">
                   Store
                 </TableCell>
@@ -81,6 +126,9 @@ export function SuperadminStoresPage() {
                 </TableCell>
                 <TableCell isHeader className="px-5 py-3 text-start text-theme-xs font-medium text-gray-500">
                   Created
+                </TableCell>
+                <TableCell isHeader className="px-5 py-3 text-end text-theme-xs font-medium text-gray-500">
+                  Actions
                 </TableCell>
               </TableRow>
             </TableHeader>
@@ -102,16 +150,29 @@ export function SuperadminStoresPage() {
               )}
               {stores.map((store) => (
                 <TableRow key={store.id} className="hover:bg-gray-50">
+                  <TableCell className="px-5 py-4">
+                    <SelectionCheckbox
+                      checked={selection.selected.has(store.id)}
+                      onChange={() => selection.toggle(store.id)}
+                      ariaLabel={`Select ${store.name}`}
+                    />
+                  </TableCell>
                   <TableCell className="px-5 py-4 text-start">
-                    <Link to={`/superadmin/stores/${store.id}`} className="block">
+                    <button type="button" onClick={() => navigate(`/superadmin/stores/${store.id}`)} className="block text-start">
                       <span className="text-theme-sm font-medium text-gray-800">{store.name}</span>
                       <span className="block text-xs text-gray-500">/s/{store.slug}</span>
-                    </Link>
+                    </button>
                   </TableCell>
                   <TableCell className="px-5 py-4 text-start text-theme-sm text-gray-600">{store.phone}</TableCell>
                   <TableCell className="px-5 py-4 text-start text-theme-sm text-gray-600">{store.order_count}</TableCell>
                   <TableCell className="px-5 py-4 text-start text-theme-sm text-gray-500">
                     {new Date(store.created_at).toLocaleDateString()}
+                  </TableCell>
+                  <TableCell className="px-5 py-4 text-end">
+                    <RowActions
+                      onView={() => navigate(`/superadmin/stores/${store.id}`)}
+                      onDelete={() => requestDelete([store.id])}
+                    />
                   </TableCell>
                 </TableRow>
               ))}
@@ -123,6 +184,23 @@ export function SuperadminStoresPage() {
           <Pagination page={page} pageSize={PAGE_SIZE} total={storesQuery.data.total} onPageChange={setPage} />
         )}
       </ComponentCard>
+
+      <ConfirmationModal
+        isOpen={deleteModal.isOpen}
+        onClose={() => {
+          deleteModal.closeModal();
+          setPendingDeleteIds(null);
+        }}
+        onConfirm={() => pendingDeleteIds && deleteMutation.mutate(pendingDeleteIds)}
+        title={pendingDeleteIds && pendingDeleteIds.length > 1 ? "Delete stores" : "Delete store"}
+        description={`This permanently deletes ${
+          pendingDeleteIds && pendingDeleteIds.length > 1 ? `${pendingDeleteIds.length} stores` : "this store"
+        } and all associated data — members, products, templates, orders and message history. This cannot be undone.`}
+        variant="destructive"
+        confirmLabel="Delete"
+        loading={deleteMutation.isPending}
+        error={deleteMutation.error instanceof ApiError ? deleteMutation.error.message : deleteMutation.error ? "Couldn't delete." : null}
+      />
     </div>
   );
 }
