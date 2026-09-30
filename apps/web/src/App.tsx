@@ -22,6 +22,8 @@ import { MyOrdersPage } from "./pages/MyOrdersPage";
 import { NotFoundPage } from "./pages/NotFoundPage";
 import { OrderPage } from "./pages/OrderPage";
 import { StorefrontPage } from "./pages/StorefrontPage";
+import { SuperadminCustomerDetailPage } from "./pages/superadmin/SuperadminCustomerDetailPage";
+import { SuperadminCustomersPage } from "./pages/superadmin/SuperadminCustomersPage";
 import { SuperadminDashboardPage } from "./pages/superadmin/SuperadminDashboardPage";
 import { SuperadminLoginPage } from "./pages/superadmin/SuperadminLoginPage";
 import { SuperadminOrdersPage } from "./pages/superadmin/SuperadminOrdersPage";
@@ -68,6 +70,8 @@ function App() {
             <Route path="superadmin/dashboard" element={<SuperadminDashboardPage />} />
             <Route path="superadmin/stores" element={<SuperadminStoresPage />} />
             <Route path="superadmin/stores/:id" element={<SuperadminStoreDetailPage />} />
+            <Route path="superadmin/customers" element={<SuperadminCustomersPage />} />
+            <Route path="superadmin/customers/:id" element={<SuperadminCustomerDetailPage />} />
             <Route path="superadmin/orders" element={<SuperadminOrdersPage />} />
           </Route>
         </Route>

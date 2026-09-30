@@ -3,13 +3,17 @@ import { z } from "zod";
 import { AppError } from "../middleware/errors";
 import { recordSuperadminAudit } from "../repositories/auditLogRepository";
 import {
+  deleteCustomer,
+  deleteCustomerOrders,
   deleteStore,
   deleteStoreOrders,
+  findCustomerById,
+  findOrderIdsByCustomer,
   findOrderIdsBySeller,
   findStoreById,
 } from "../repositories/superadminRepository";
 import { streamStoreBackup } from "../services/superadminBackupService";
-import { purgeStoreStorage } from "../services/superadminStorageService";
+import { purgeOrderProofs, purgeStoreStorage } from "../services/superadminStorageService";
 
 function requireSuperadminUserId(req: Request) {
   if (!req.user) {
@@ -93,6 +97,70 @@ export async function deleteSuperadminStore(req: Request, res: Response) {
     targetType: "store",
     targetId: store.id,
     metadata: { name: store.name, slug: store.slug },
+  });
+
+  res.json({ ok: true });
+}
+
+async function requireCustomer(id: string) {
+  const customer = await findCustomerById(id);
+  if (!customer) {
+    throw new AppError(404, "customer_not_found", "No such customer");
+  }
+  return customer;
+}
+
+export async function deleteSuperadminCustomerOrders(req: Request, res: Response) {
+  const actorUserId = requireSuperadminUserId(req);
+  const customer = await requireCustomer(req.params.id);
+  deleteOrdersSchema.parse(req.body);
+
+  const orderIds = await findOrderIdsByCustomer(customer.id);
+  const deletedCount = await deleteCustomerOrders(customer.id);
+
+  try {
+    await purgeOrderProofs(orderIds);
+  } catch (err) {
+    console.error(`Failed to purge proofs for customer ${customer.id}:`, err);
+  }
+
+  await recordSuperadminAudit({
+    actorUserId,
+    action: "customer_orders_deleted",
+    targetType: "customer",
+    targetId: customer.id,
+    metadata: { deletedCount },
+  });
+
+  res.json({ deletedCount });
+}
+
+export async function deleteSuperadminCustomer(req: Request, res: Response) {
+  const actorUserId = requireSuperadminUserId(req);
+  const customer = await requireCustomer(req.params.id);
+
+  const deleteCustomerSchema = z.object({
+    confirm: z.literal(`DELETE CUSTOMER ${customer.phone}`, {
+      errorMap: () => ({ message: `Type "DELETE CUSTOMER ${customer.phone}" to confirm` }),
+    }),
+  });
+  deleteCustomerSchema.parse(req.body);
+
+  const orderIds = await findOrderIdsByCustomer(customer.id);
+  await deleteCustomer(customer.id);
+
+  try {
+    await purgeOrderProofs(orderIds);
+  } catch (err) {
+    console.error(`Failed to purge proofs for deleted customer ${customer.id}:`, err);
+  }
+
+  await recordSuperadminAudit({
+    actorUserId,
+    action: "customer_deleted",
+    targetType: "customer",
+    targetId: customer.id,
+    metadata: { name: customer.name, phone: customer.phone, orderCount: orderIds.length },
   });
 
   res.json({ ok: true });

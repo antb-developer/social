@@ -16,6 +16,13 @@ const mocks = vi.hoisted(() => ({
   deleteStore: vi.fn(),
   findOrderIdsBySeller: vi.fn(),
   ensureSuperadmin: vi.fn(),
+  listCustomers: vi.fn(),
+  findCustomerById: vi.fn(),
+  listCustomerOrders: vi.fn(),
+  findOrderIdsByCustomer: vi.fn(),
+  deleteCustomerOrders: vi.fn(),
+  deleteCustomer: vi.fn(),
+  purgeOrderProofs: vi.fn(),
   recordSuperadminAudit: vi.fn(),
   streamStoreBackup: vi.fn(),
   purgeStoreStorage: vi.fn(),
@@ -48,6 +55,12 @@ vi.mock("../../repositories/superadminRepository", () => ({
   deleteStore: mocks.deleteStore,
   findOrderIdsBySeller: mocks.findOrderIdsBySeller,
   ensureSuperadmin: mocks.ensureSuperadmin,
+  listCustomers: mocks.listCustomers,
+  findCustomerById: mocks.findCustomerById,
+  listCustomerOrders: mocks.listCustomerOrders,
+  findOrderIdsByCustomer: mocks.findOrderIdsByCustomer,
+  deleteCustomerOrders: mocks.deleteCustomerOrders,
+  deleteCustomer: mocks.deleteCustomer,
 }));
 
 vi.mock("../../repositories/authUserRepository", () => ({
@@ -65,10 +78,20 @@ vi.mock("../../services/superadminBackupService", () => ({
 
 vi.mock("../../services/superadminStorageService", () => ({
   purgeStoreStorage: mocks.purgeStoreStorage,
+  purgeOrderProofs: mocks.purgeOrderProofs,
+}));
+
+// The limiter's counter is process-wide and shared by every destructive route,
+// so once this file makes >10 destructive calls it 429s unrelated tests. Its
+// behaviour is covered in middleware/__tests__/rateLimit.test.ts.
+vi.mock("../../middleware/rateLimit", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../middleware/rateLimit")>()),
+  superadminDestructiveRateLimiter: (_req: unknown, _res: unknown, next: () => void) => next(),
 }));
 
 const SUPERADMIN_USER = { id: "super-1", phone: "919990003333" };
 const NON_SUPERADMIN_USER = { id: "user-2", phone: "919990001111" };
+const CUSTOMER = { id: "cust-1", name: "Asha", phone: "919990002222", created_at: "2026-01-01T00:00:00Z" };
 const STORE = { id: "store-1", name: "Demo Store", slug: "demo-store" };
 
 beforeEach(() => {
@@ -376,6 +399,113 @@ describe("DELETE /api/superadmin/stores/:id", () => {
     expect(res.status).toBe(200);
     expect(mocks.recordSuperadminAudit).toHaveBeenCalledWith(
       expect.objectContaining({ action: "store_deleted" })
+    );
+  });
+});
+
+describe("superadmin customers", () => {
+  it("rejects non-superadmins", async () => {
+    asNonSuperadmin();
+    const res = await request(createApp()).get("/api/superadmin/customers").set("Authorization", "Bearer good");
+    expect(res.status).toBe(403);
+    expect(mocks.listCustomers).not.toHaveBeenCalled();
+  });
+
+  it("lists customers with search and pagination", async () => {
+    asSuperadmin();
+    mocks.listCustomers.mockResolvedValue({ data: [CUSTOMER], total: 1 });
+
+    const res = await request(createApp())
+      .get("/api/superadmin/customers?q=asha&page=2&pageSize=5")
+      .set("Authorization", "Bearer good");
+
+    expect(res.status).toBe(200);
+    expect(mocks.listCustomers).toHaveBeenCalledWith({ page: 2, pageSize: 5, q: "asha" });
+    expect(res.body).toEqual({ data: [CUSTOMER], total: 1, page: 2, pageSize: 5 });
+  });
+
+  it("returns a customer and audits the view; 404s an unknown one", async () => {
+    asSuperadmin();
+    mocks.findCustomerById.mockResolvedValueOnce(CUSTOMER).mockResolvedValueOnce(null);
+
+    const ok = await request(createApp()).get("/api/superadmin/customers/cust-1").set("Authorization", "Bearer good");
+    expect(ok.status).toBe(200);
+    expect(mocks.recordSuperadminAudit).toHaveBeenCalledWith({
+      actorUserId: SUPERADMIN_USER.id,
+      action: "customer_viewed",
+      targetType: "customer",
+      targetId: CUSTOMER.id,
+    });
+
+    const missing = await request(createApp()).get("/api/superadmin/customers/nope").set("Authorization", "Bearer good");
+    expect(missing.status).toBe(404);
+  });
+
+  it("lists a customer's orders", async () => {
+    asSuperadmin();
+    mocks.findCustomerById.mockResolvedValue(CUSTOMER);
+    mocks.listCustomerOrders.mockResolvedValue({ data: [{ id: "o1" }], total: 1 });
+
+    const res = await request(createApp())
+      .get("/api/superadmin/customers/cust-1/orders")
+      .set("Authorization", "Bearer good");
+
+    expect(res.status).toBe(200);
+    expect(mocks.listCustomerOrders).toHaveBeenCalledWith(CUSTOMER.id, { page: 1, pageSize: 20 });
+  });
+
+  it("DELETE orders requires the typed confirmation, then deletes, purges proofs and audits", async () => {
+    asSuperadmin();
+    mocks.findCustomerById.mockResolvedValue(CUSTOMER);
+    mocks.findOrderIdsByCustomer.mockResolvedValue(["o1", "o2"]);
+    mocks.deleteCustomerOrders.mockResolvedValue(2);
+
+    const bad = await request(createApp())
+      .delete("/api/superadmin/customers/cust-1/orders")
+      .set("Authorization", "Bearer good")
+      .send({ confirm: "nope" });
+    expect(bad.status).toBe(400);
+    expect(mocks.deleteCustomerOrders).not.toHaveBeenCalled();
+
+    const res = await request(createApp())
+      .delete("/api/superadmin/customers/cust-1/orders")
+      .set("Authorization", "Bearer good")
+      .send({ confirm: "DELETE ORDERS" });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ deletedCount: 2 });
+    expect(mocks.purgeOrderProofs).toHaveBeenCalledWith(["o1", "o2"]);
+    expect(mocks.recordSuperadminAudit).toHaveBeenCalledWith({
+      actorUserId: SUPERADMIN_USER.id,
+      action: "customer_orders_deleted",
+      targetType: "customer",
+      targetId: CUSTOMER.id,
+      metadata: { deletedCount: 2 },
+    });
+  });
+
+  it("DELETE customer needs the phone-specific confirmation and still succeeds if proof purge fails", async () => {
+    asSuperadmin();
+    mocks.findCustomerById.mockResolvedValue(CUSTOMER);
+    mocks.findOrderIdsByCustomer.mockResolvedValue(["o1"]);
+    mocks.purgeOrderProofs.mockRejectedValue(new Error("storage unavailable"));
+
+    const bad = await request(createApp())
+      .delete("/api/superadmin/customers/cust-1")
+      .set("Authorization", "Bearer good")
+      .send({ confirm: "DELETE CUSTOMER 000" });
+    expect(bad.status).toBe(400);
+    expect(mocks.deleteCustomer).not.toHaveBeenCalled();
+
+    const res = await request(createApp())
+      .delete("/api/superadmin/customers/cust-1")
+      .set("Authorization", "Bearer good")
+      .send({ confirm: `DELETE CUSTOMER ${CUSTOMER.phone}` });
+
+    expect(res.status).toBe(200);
+    expect(mocks.deleteCustomer).toHaveBeenCalledWith(CUSTOMER.id);
+    expect(mocks.recordSuperadminAudit).toHaveBeenCalledWith(
+      expect.objectContaining({ action: "customer_deleted", targetId: CUSTOMER.id })
     );
   });
 });

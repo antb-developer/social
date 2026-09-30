@@ -164,3 +164,87 @@ export async function deleteStore(sellerId: string): Promise<void> {
   const { error } = await supabaseAdmin.rpc("superadmin_delete_store", { p_seller_id: sellerId });
   if (error) throw error;
 }
+
+export async function listCustomers(opts: { q?: string } & Pagination) {
+  let query = supabaseAdmin.from("customers").select("id, name, phone, created_at", { count: "exact" });
+
+  const term = opts.q ? sanitizeSearchTerm(opts.q) : "";
+  if (term) {
+    query = query.or(`name.ilike.%${term}%,phone.ilike.%${term}%`);
+  }
+
+  const [from, to] = rangeFor(opts);
+  const { data, error, count } = await query.order("created_at", { ascending: false }).range(from, to);
+  if (error) throw error;
+
+  const customerIds = (data ?? []).map((c) => c.id);
+  const orderCounts = await countOrdersByCustomerIds(customerIds);
+
+  return {
+    data: (data ?? []).map((c) => ({ ...c, order_count: orderCounts[c.id] ?? 0 })),
+    total: count ?? 0,
+  };
+}
+
+async function countOrdersByCustomerIds(customerIds: string[]): Promise<Record<string, number>> {
+  if (customerIds.length === 0) return {};
+
+  const { data, error } = await supabaseAdmin.from("orders").select("customer_id").in("customer_id", customerIds);
+  if (error) throw error;
+
+  const tally: Record<string, number> = {};
+  for (const row of data ?? []) {
+    tally[row.customer_id] = (tally[row.customer_id] ?? 0) + 1;
+  }
+  return tally;
+}
+
+export async function findCustomerById(id: string) {
+  const { data, error } = await supabaseAdmin
+    .from("customers")
+    .select("id, name, phone, created_at")
+    .eq("id", id)
+    .maybeSingle();
+  if (error) throw error;
+  return data;
+}
+
+export async function listCustomerOrders(customerId: string, pagination: Pagination) {
+  const [from, to] = rangeFor(pagination);
+  const { data, error, count } = await supabaseAdmin
+    .from("orders")
+    .select("id, order_no, status, total_paise, created_at, seller:sellers(id, name, slug)", { count: "exact" })
+    .eq("customer_id", customerId)
+    .order("created_at", { ascending: false })
+    .range(from, to);
+  if (error) throw error;
+  return { data: data ?? [], total: count ?? 0 };
+}
+
+export async function findOrderIdsByCustomer(customerId: string): Promise<string[]> {
+  const { data, error } = await supabaseAdmin.from("orders").select("id").eq("customer_id", customerId);
+  if (error) throw error;
+  return (data ?? []).map((o) => o.id);
+}
+
+// A single DELETE statement is atomic in Postgres. order_items / messages /
+// payment_proofs / status history go with the orders via ON DELETE CASCADE.
+export async function deleteCustomerOrders(customerId: string): Promise<number> {
+  const { count, error } = await supabaseAdmin
+    .from("orders")
+    .delete({ count: "exact" })
+    .eq("customer_id", customerId);
+  if (error) throw error;
+  return count ?? 0;
+}
+
+/**
+ * Removes the customer profile and, via cascade, all of their orders. The
+ * underlying auth user is deliberately left alone: the same phone may also be
+ * a seller/staff login, and the customer row is recreated on their next
+ * customer sign-in (ensureCustomer).
+ */
+export async function deleteCustomer(customerId: string): Promise<void> {
+  const { error } = await supabaseAdmin.from("customers").delete().eq("id", customerId);
+  if (error) throw error;
+}

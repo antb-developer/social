@@ -152,3 +152,15 @@ export function StoreIcon({ className = "h-4 w-4" }: IconProps) {
     </svg>
   );
 }
+
+export function UsersIcon({ className = "h-4 w-4" }: IconProps) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.7}>
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M16 20v-1.5a3.5 3.5 0 0 0-3.5-3.5h-5A3.5 3.5 0 0 0 4 18.5V20M10 11.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7ZM20 20v-1.5a3.5 3.5 0 0 0-2.5-3.35M15.5 4.65a3.5 3.5 0 0 1 0 6.7"
+      />
+    </svg>
+  );
+}

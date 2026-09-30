@@ -5,8 +5,11 @@ import { recordSuperadminAudit } from "../repositories/auditLogRepository";
 import {
   countOrders,
   countStores,
+  findCustomerById,
   findStoreById,
   listAllOrders,
+  listCustomerOrders,
+  listCustomers,
   listStoreMembers,
   listStoreOrders,
   listStores,
@@ -93,4 +96,42 @@ export async function listSuperadminOrders(req: Request, res: Response) {
   const filters = listOrdersSchema.parse(req.query);
   const result = await listAllOrders(filters);
   res.json({ ...result, page: filters.page, pageSize: filters.pageSize });
+}
+
+export async function listSuperadminCustomers(req: Request, res: Response) {
+  requireSuperadminUserId(req);
+  const { page, pageSize, q } = listStoresSchema.parse(req.query);
+  const result = await listCustomers({ page, pageSize, q });
+  res.json({ ...result, page, pageSize });
+}
+
+async function requireCustomer(id: string) {
+  const customer = await findCustomerById(id);
+  if (!customer) {
+    throw new AppError(404, "customer_not_found", "No such customer");
+  }
+  return customer;
+}
+
+export async function getSuperadminCustomer(req: Request, res: Response) {
+  const actorUserId = requireSuperadminUserId(req);
+  const customer = await requireCustomer(req.params.id);
+
+  await recordSuperadminAudit({
+    actorUserId,
+    action: "customer_viewed",
+    targetType: "customer",
+    targetId: customer.id,
+  });
+
+  res.json(customer);
+}
+
+export async function getSuperadminCustomerOrders(req: Request, res: Response) {
+  requireSuperadminUserId(req);
+  const { page, pageSize } = paginationSchema.parse(req.query);
+  const customer = await requireCustomer(req.params.id);
+
+  const result = await listCustomerOrders(customer.id, { page, pageSize });
+  res.json({ ...result, page, pageSize });
 }

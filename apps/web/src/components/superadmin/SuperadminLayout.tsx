@@ -1,10 +1,11 @@
 import { AdminShell } from "../admin/AdminShell";
 import type { NavItem } from "../admin/AdminSidebar";
-import { GridIcon, OrdersIcon, StoreIcon } from "../admin/icons";
+import { GridIcon, OrdersIcon, StoreIcon, UsersIcon } from "../admin/icons";
 
 const NAV_ITEMS: NavItem[] = [
   { to: "/superadmin/dashboard", label: "Dashboard", icon: GridIcon, end: true },
   { to: "/superadmin/stores", label: "Stores", icon: StoreIcon, alsoActiveFor: ["/superadmin/stores/"] },
+  { to: "/superadmin/customers", label: "Customers", icon: UsersIcon, alsoActiveFor: ["/superadmin/customers/"] },
   { to: "/superadmin/orders", label: "Orders", icon: OrdersIcon },
 ];
 

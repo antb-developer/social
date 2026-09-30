@@ -26,3 +26,8 @@ export async function purgeStoreStorage(sellerId: string, orderIds: string[]) {
   await removeAllUnderPrefix(PRODUCT_IMAGE_BUCKET, sellerId);
   await Promise.all(orderIds.map((orderId) => removeAllUnderPrefix(PAYMENT_PROOF_BUCKET, orderId)));
 }
+
+/** Payment-proof files for orders that were just deleted (DB rows already gone). */
+export async function purgeOrderProofs(orderIds: string[]) {
+  await Promise.all(orderIds.map((orderId) => removeAllUnderPrefix(PAYMENT_PROOF_BUCKET, orderId)));
+}

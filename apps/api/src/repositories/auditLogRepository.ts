@@ -1,6 +1,13 @@
 import { supabaseAdmin } from "../config/supabase";
 
-export type SuperadminAuditAction = "store_viewed" | "backup_created" | "orders_deleted" | "store_deleted";
+export type SuperadminAuditAction =
+  | "store_viewed"
+  | "backup_created"
+  | "orders_deleted"
+  | "store_deleted"
+  | "customer_viewed"
+  | "customer_orders_deleted"
+  | "customer_deleted";
 
 export async function recordSuperadminAudit(input: {
   actorUserId: string;

@@ -1,15 +1,20 @@
 import { Router } from "express";
 import {
+  deleteSuperadminCustomer,
+  deleteSuperadminCustomerOrders,
   deleteSuperadminStore,
   deleteSuperadminStoreOrders,
   postSuperadminStoreBackup,
 } from "../controllers/superadminActionsController";
 import { superadminLogin } from "../controllers/superadminAuthController";
 import {
+  getSuperadminCustomer,
+  getSuperadminCustomerOrders,
   getSuperadminDashboard,
   getSuperadminStore,
   getSuperadminStoreOrders,
   getSuperadminStoreUsers,
+  listSuperadminCustomers,
   listSuperadminOrders,
   listSuperadminStores,
 } from "../controllers/superadminController";
@@ -44,3 +49,17 @@ superadminRoutes.delete(
   asyncHandler(deleteSuperadminStoreOrders)
 );
 superadminRoutes.delete("/stores/:id", superadminDestructiveRateLimiter, asyncHandler(deleteSuperadminStore));
+
+superadminRoutes.get("/customers", asyncHandler(listSuperadminCustomers));
+superadminRoutes.get("/customers/:id", asyncHandler(getSuperadminCustomer));
+superadminRoutes.get("/customers/:id/orders", asyncHandler(getSuperadminCustomerOrders));
+superadminRoutes.delete(
+  "/customers/:id/orders",
+  superadminDestructiveRateLimiter,
+  asyncHandler(deleteSuperadminCustomerOrders)
+);
+superadminRoutes.delete(
+  "/customers/:id",
+  superadminDestructiveRateLimiter,
+  asyncHandler(deleteSuperadminCustomer)
+);
